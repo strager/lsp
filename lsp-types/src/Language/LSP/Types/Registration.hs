@@ -62,7 +62,7 @@ import           Language.LSP.Types.WorkspaceSymbol
 type family RegistrationOptions (m :: Method FromClient t) :: Type where
   -- Workspace
   RegistrationOptions WorkspaceDidChangeWorkspaceFolders = Empty
-  RegistrationOptions WorkspaceDidChangeConfiguration    = Empty
+  RegistrationOptions WorkspaceDidChangeConfiguration    = Maybe Object
   RegistrationOptions WorkspaceDidChangeWatchedFiles     = DidChangeWatchedFilesRegistrationOptions
   RegistrationOptions WorkspaceSymbol                    = WorkspaceSymbolRegistrationOptions
   RegistrationOptions WorkspaceExecuteCommand            = ExecuteCommandRegistrationOptions
