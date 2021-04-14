@@ -14,6 +14,7 @@ module Language.LSP.Test.Parsing
   ( -- $receiving
     satisfy
   , satisfyMaybe
+  , noMessageWithinMicrosecondTimeout
   , message
   , response
   , responseForId
@@ -37,6 +38,7 @@ import qualified Data.Text as T
 import Data.Typeable
 import Language.LSP.Types
 import Language.LSP.Test.Session
+import qualified System.Clock as Clock
 
 -- $receiving
 -- To receive a message, specify the method of the message to expect:
@@ -78,6 +80,28 @@ satisfy pred = satisfyMaybe (\msg -> if pred msg then Just msg else Nothing)
 satisfyMaybe :: (FromServerMessage -> Maybe a) -> Session a
 satisfyMaybe pred = satisfyMaybeM (pure . pred)
 
+-- | @@@
+--
+-- @since @@@
+noMessageWithinMicrosecondTimeout :: Int -> Session ()
+noMessageWithinMicrosecondTimeout timeoutMicroseconds = do
+  beginTime <- liftIO $ Clock.getTime Clock.Monotonic
+
+  chan <- asks messageChan
+  liftIO $ forkIO $ do
+    threadDelay timeoutMicroseconds
+    writeChan chan PingMessage
+
+  x <- Session await
+  case x of
+    ParserMessage _ -> empty
+    Ping -> do
+      endTime <- liftIO $ Clock.getTime Clock.Monotonic
+      let elapsedNanoseconds = Clock.toNanoSecs (beginTime `Clock.diffTimeSpec` endTime)
+      if elapsedNanoseconds >= toInteger timeoutMicroseconds * 1000
+        then return ()
+        else empty
+
 satisfyMaybeM :: (FromServerMessage -> Session (Maybe a)) -> Session a
 satisfyMaybeM pred = do 
   
@@ -94,20 +118,22 @@ satisfyMaybeM pred = do
         writeChan chan (TimeoutMessage timeoutId)
 
   x <- Session await
+  case x of
+    Ping -> empty
+    ParserMessage m -> do
+      forM_ mtid $ \tid -> do
+        bumpTimeoutId timeoutId
+        liftIO $ killThread tid
 
-  forM_ mtid $ \tid -> do
-    bumpTimeoutId timeoutId
-    liftIO $ killThread tid
+      modify $ \s -> s { lastReceivedMessage = Just m }
 
-  modify $ \s -> s { lastReceivedMessage = Just x }
+      res <- pred m
 
-  res <- pred x
-
-  case res of
-    Just a -> do
-      logMsg LogServer x
-      return a
-    Nothing -> empty
+      case res of
+        Just a -> do
+          logMsg LogServer m
+          return a
+        Nothing -> empty
 
 named :: T.Text -> Session a -> Session a
 named s (Session x) = Session (Data.Conduit.Parser.named s x)

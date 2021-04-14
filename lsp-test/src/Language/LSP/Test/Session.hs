@@ -13,8 +13,9 @@
 module Language.LSP.Test.Session
   ( Session(..)
   , SessionConfig(..)
-  , defaultConfig
   , SessionMessage(..)
+  , ParserMessage(..)
+  , defaultConfig
   , SessionContext(..)
   , SessionState(..)
   , runSession'
@@ -90,7 +91,7 @@ import Data.IORef
 -- 'Language.LSP.Test.sendRequest' and
 -- 'Language.LSP.Test.sendNotification'.
 
-newtype Session a = Session (ConduitParser FromServerMessage (StateT SessionState (ReaderT SessionContext IO)) a)
+newtype Session a = Session (ConduitParser ParserMessage (StateT SessionState (ReaderT SessionContext IO)) a)
   deriving (Functor, Applicative, Monad, MonadIO, Alternative)
 
 #if __GLASGOW_HASKELL__ >= 806
@@ -130,7 +131,11 @@ instance Default SessionConfig where
 
 data SessionMessage = ServerMessage FromServerMessage
                     | TimeoutMessage Int
+                    | PingMessage
   deriving Show
+
+data ParserMessage = ParserMessage FromServerMessage
+                   | Ping
 
 data SessionContext = SessionContext
   {
@@ -233,12 +238,13 @@ runSessionMonad context state (Session session) = runReaderT (runStateT conduit 
     isLogNotification (ServerMessage (FromServerMess SWindowLogMessage _)) = True
     isLogNotification _ = False
 
-    watchdog :: ConduitM SessionMessage FromServerMessage (StateT SessionState (ReaderT SessionContext IO)) ()
+    watchdog :: ConduitM SessionMessage ParserMessage (StateT SessionState (ReaderT SessionContext IO)) ()
     watchdog = Conduit.awaitForever $ \msg -> do
       curId <- getCurTimeoutId
       case msg of
-        ServerMessage sMsg -> yield sMsg
+        ServerMessage sMsg -> yield $ ParserMessage sMsg
         TimeoutMessage tId -> when (curId == tId) $ lastReceivedMessage <$> get >>= throw . Timeout
+        PingMessage -> yield Ping
 
 -- | An internal version of 'runSession' that allows for a custom handler to listen to the server.
 -- It also does not automatically send initialize and exit messages.
@@ -297,10 +303,13 @@ runSession' serverIn serverOut mServerProc serverHandler config caps rootDir exi
                          (const $ initVFS $ \vfs -> runSessionMonad context (initState vfs) session)
   return result
 
-updateStateC :: ConduitM FromServerMessage FromServerMessage (StateT SessionState (ReaderT SessionContext IO)) ()
+updateStateC :: ConduitM ParserMessage ParserMessage (StateT SessionState (ReaderT SessionContext IO)) ()
 updateStateC = awaitForever $ \msg -> do
-  updateState msg
-  respond msg
+  case msg of
+    ParserMessage m -> do
+      updateState m
+      respond m
+    Ping -> return ()
   yield msg
   where
     respond :: (MonadIO m, HasReader SessionContext m) => FromServerMessage -> m ()

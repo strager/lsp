@@ -317,6 +317,31 @@ main = hspec $ around withDummyServer $ do
       result <- satisfyMaybe pred <|> (message SWindowLogMessage *> pure "no match")
       liftIO $ result `shouldBe` "no match"
 
+  describe "noMessageWithinMicrosecondTimeout" $ do
+    it "returns alternative if message is received" $ \(hin, hout) -> runSessionWithHandles hin hout def fullCaps "." $ do
+      -- We expect window/logMessage "initialized" from the server.
+      result <- (noMessageWithinMicrosecondTimeout (10 * 10^6) *> pure "timeout")
+        <|> (message SWindowLogMessage *> pure "log")
+      liftIO $ result `shouldBe` ("log" :: String)
+
+    it "returns if no message is received" $ \(hin, hout) -> runSessionWithHandles hin hout def fullCaps "." $ do
+      -- We expect window/logMessage "initialized" from the server, but no messages thereafter.
+      _ <- message SWindowLogMessage
+      noMessageWithinMicrosecondTimeout (10^6)
+
+    -- @@@ HELP: This test fails. 'pure "no message"' wouldn't execute until
+    -- 'await' (called by 'noMessageWithinMicrosecondTimeout') unblocks. 'await'
+    -- unblocks when the 'Ping' message sent by
+    -- 'noMessageWithinMicrosecondTimeout' arrives. The 'Ping' message is
+    -- handled by 'noMessageWithinMicrosecondTimeout', so 'empty' isn't called,
+    -- so 'pure "no message"' doesn't execute.
+    it "does not return if alternative is pure" $ \(hin, hout) -> runSessionWithHandles hin hout def fullCaps "." $ do
+      -- We expect window/logMessage "initialized" from the server, but no messages thereafter.
+      _ <- message SWindowLogMessage
+      result <- (noMessageWithinMicrosecondTimeout (10^6) *> pure "no message")
+        <|> pure "pure"
+      liftIO $ result `shouldBe` ("pure" :: String)
+
   describe "ignoreLogNotifications" $
     it "works" $ \(hin, hout) ->
       runSessionWithHandles hin hout (def { ignoreLogNotifications = True }) fullCaps "." $ do
